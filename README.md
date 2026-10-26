@@ -1,4 +1,4 @@
-# Savepoint
+# SnaPeka
 
 Checkpoint and rollback skill for Hermes Agent (Nous Research).
 
