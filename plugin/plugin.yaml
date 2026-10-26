@@ -1,0 +1,18 @@
+name: snapeka
+version: 0.2.0
+description: "Checkpoint and rollback for Hermes Agent. Snapshot a project before risky changes, verify afterwards, and restore the last-known-good state in one command when fixes fail repeatedly. Git backend with a tar.gz archive fallback, on-disk state, concurrency lock, and a pre_tool_call guard that blocks file writes without an active checkpoint."
+author: dasrams31
+kind: standalone
+platforms:
+  - linux
+  - macos
+provides_tools:
+  - checkpoint_create
+  - checkpoint_verify
+  - checkpoint_rollback
+  - checkpoint_list
+  - checkpoint_status
+  - checkpoint_dry_run
+provides_hooks:
+  - pre_tool_call
+  - transform_llm_output

@@ -344,3 +344,113 @@ SKILL.md follows the agentskills.io standard and contains, in order: when the sk
 ---
 
 *This document is a draft. Section 15 must be closed before phase 2 starts. Any change to the architecture decisions in section 5 must be updated in this document, not only in code.*
+
+---
+
+## 17. Phase 2 addendum: TBD resolutions and architecture changes
+
+Section 15 is closed. All five open questions were resolved on October 27,
+2026, against the official Hermes plugin documentation, the agentskills.io
+specification, the Daytona sandbox documentation, and the local Hermes
+checkout (`hermes_cli/plugins.py`, bundled plugins). The resolutions below
+are the authoritative answers for phase 2.
+
+### TBD 1: Hermes hooks — CLOSED
+
+A pre-tool-execution hook exists: `pre_tool_call`. It receives
+`(tool_name, args)` and may return `{"action": "block", "message": ...}`
+to veto the call, or `{"action": "approve", ...}` to escalate to human
+approval. Most other hooks are fire-and-forget observers; the exceptions
+are `pre_llm_call` (context injection) and `pre_tool_call` (block/approve).
+`transform_llm_output` rewrites the finished reply (first non-None return
+wins) and is the right hook for secret redaction. `transform_tool_result`
+is also used by the bundled `security-guidance` plugin.
+
+**Architecture change (supersedes the section 15 assumption):** snapshot
+enforcement is no longer SKILL.md-only. Phase 2 registers a `pre_tool_call`
+hook that blocks `write_file` and `patch` calls inside a project that
+already uses SnaPeka but has no active checkpoint. The hook is fail-open
+(it never raises; anything unexpected passes through), applies only to
+projects with a `.hermes-checkpoints` directory (opt-in by use), and does
+not attempt to attribute `terminal` commands to a project. Verified
+built-in write tool names: `write_file`, `patch`, `terminal`.
+
+### TBD 2: SKILL.md frontmatter — CLOSED
+
+Only `name` and `description` are required. Constraints: `name` is at most
+64 characters, lowercase letters, digits, and hyphens only, never leading
+or trailing with a hyphen; `description` is at most 1024 characters and
+non-empty. Optional fields: `license`, `compatibility` (at most 500
+characters), `metadata` (free string-to-string map), `allowed-tools`
+(experimental, support varies by agent).
+
+**Consequence:** the phase 1 SKILL.md violated the specification with
+`name: SnaPeka` (uppercase). Phase 2 renames it to `snapeka`, and the
+skill directory must be named exactly `snapeka`. The phase 2 SKILL.md
+also adds `license` (MIT), `compatibility` (requires git, Python 3.10+),
+and `metadata` (author, version).
+
+### TBD 3: Daytona and Modal hibernation — CLOSED
+
+On both backends, `.hermes-checkpoints/` survives hibernation as long as
+the sandbox is not permanently deleted. Only in-memory and process state
+is lost, never files. Daytona defaults to a persistent filesystem
+(`persistent_filesystem: True` in the Hermes Daytona backend); stopping a
+sandbox preserves the filesystem, only deleting destroys it, and the disk
+is capped at 10 GB. Modal keeps persistent filesystem snapshots across
+sessions (snapshot ids stored per task).
+
+**Design note:** `state.json` is reconstructible from git history
+(snapshot commits carry `snapeka: cp-<task>-<number>` messages and the LKG
+is tracked at `refs/snapeka/lkg`), so losing `state.json` only loses
+pointers, not snapshots. The archive backend is higher-risk because the
+`.tgz` file is the only copy, which is why TBD 5 sets a size limit.
+
+### TBD 4: Plugin write permission — CLOSED
+
+Yes: a plugin may write to the user's project directory with no explicit
+manifest permission and no sandbox. Capabilities are consent plus audit,
+not a sandbox: they gate host API surfaces only. No filesystem capability
+exists. The gates are install/enable consent, operator opt-in for
+overriding a built-in tool, and escalation through `pre_tool_call` by
+another plugin (not a default). On remote backends, writes land in the
+sandbox/container filesystem, which is exactly where the agent's project
+lives, so SnaPeka's on-disk state works on every backend.
+
+### TBD 5: Archive snapshot size limit — CLOSED as a design recommendation
+
+No canonical limit exists in comparable tools (git has no hard stash
+limit; tar has none), so this is a design decision: warn above 100 MB
+and refuse above 500 MB of compressed `.tgz` size, configurable via
+`warn_archive_bytes` and `max_archive_bytes`. Rationale: 100 MB is the
+widely known GitHub push cap (a familiar "large" threshold); 10 retained
+archives at 500 MB equal 5 GB, under the 10 GB Daytona disk cap; healthy
+code archives with default excludes are tens of MB, so the limit only
+catches misconfiguration (datasets or media being archived). Refusal is
+explicit, never a silent empty snapshot.
+
+### Additional phase 2 refinements
+
+* **Snapshot commits use plumbing on dedicated refs.** Snapshots are
+  created with `write-tree` + `commit-tree` on `refs/snapeka/<id>` and
+  never move the user's working branch. A clean tree needs no new commit:
+  the snapshot ref is the HEAD hash. The LKG is tracked at
+  `refs/snapeka/lkg`.
+* **First-task rollback fallback.** Section 8 states rollback goes only
+  to the LKG. When no promoted LKG exists yet (the very first task), an
+  automatic or manual rollback with no explicit target restores the
+  active snapshot itself (the pre-task state). If the post-rollback
+  verification passes, that snapshot is promoted to LKG, since the
+  restored tree just verified green.
+* **Promotion lives inside verify.** The six tools in section 10.1
+  contain no separate promote tool, so `checkpoint_verify` promotes the
+  active checkpoint to LKG on pass (and prunes retention), and triggers
+  automatic rollback on the Nth consecutive failure.
+* **Language rule (October 27, 2026, user directive).** All project
+  artifacts are written in English, without Indonesian. The English PRD
+  is canonical; the Indonesian PRD is kept as an archive reference only.
+* **UT-12 verification scope.** The full `hermes plugins disable` path
+  needs the Hermes CLI, which is not installed on the development
+  machine. Phase 2 verifies registration mechanics through a fake
+  context; CLI disable remains to be verified on a machine with Hermes
+  installed.

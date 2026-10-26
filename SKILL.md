@@ -1,249 +1,240 @@
 ---
-name: SnaPeka
-description: Checkpoint dan rollback untuk Hermes Agent. Buat save point sebelum perubahan berisiko, verifikasi sesudahnya, dan kembalikan proyek ke titik jalan terakhir (LKG) dalam satu perintah kalau perbaikan gagal 3 kali. Memakai git langsung (fase 1, tanpa plugin).
+name: snapeka
+description: Checkpoint and rollback for Hermes Agent. Create a save point before risky changes, verify afterwards, and restore the last-known-good state in one command when fixes fail repeatedly. Deterministic plugin tools with a git backend and an archive fallback.
+license: MIT
+compatibility: Requires git for the primary backend and Python 3.10+ for the plugin. Works on Linux and macOS.
+metadata:
+  author: dasrams31
+  version: 0.2.0
 ---
 
 # SnaPeka
 
-Skill checkpoint dan rollback untuk Hermes Agent. Prinsipnya satu kalimat:
-**tidak ada kerja berisiko tanpa save point, tidak ada promosi tanpa verifikasi
-lolos, dan rollback selalu menuju titik jalan terakhir (LKG).**
+Checkpoint and rollback skill for Hermes Agent. One sentence:
+**no risky work without a save point, no promotion without a passing
+verification, and rollback always goes to the last-known-good state (LKG).**
 
-Fase 1 ini prosedural dan memakai perintah git langsung. Tidak ada tool plugin,
-tidak ada server, tidak ada data yang dikirim ke pihak ketiga. Semua operasi
-lokal di proyek pengguna.
+This skill has two layers. The plugin tools in this repository execute
+snapshot, verify, and rollback deterministically. This document governs
+decisions: when a snapshot is required, how many fix attempts are allowed,
+and when to stop. If the plugin is unavailable, use the raw git fallback
+at the end of this document.
 
-## Kapan skill ini aktif
+Install the skill directory as `~/.hermes/skills/snapeka/` (the directory
+name must match the `name` field above) and the plugin directory as
+`~/.hermes/plugins/snapeka/`, then run `hermes plugins enable snapeka`.
 
-Aktif untuk tugas berisiko pada proyek apa pun:
+## When this skill is active
 
-- Refactor, restrukturisasi, migrasi, dan perubahan multi-file.
-- Ganti dependensi, ganti framework, atau ubah konfigurasi build.
-- Tugas yang menyentuh kode yang sedang jalan di produksi atau demo.
+Active for risky work on any project:
 
-Tidak aktif untuk tugas baca saja (menjelajah kode, menjawab pertanyaan,
-menulis dokumentasi tanpa mengubah kode) dan untuk perubahan yang pengguna
-secara eksplisit tandai sebagai aman.
+- Refactors, restructures, migrations, and multi-file changes.
+- Dependency or framework swaps, or build configuration changes.
+- Any change to code that is currently running in production or a demo.
 
-## Aturan keras
+Not active for read-only work (exploring code, answering questions, writing
+documentation without changing code) or for changes the user explicitly
+marks as safe.
 
-Aturan ini tidak boleh dilanggar dengan alasan apa pun, termasuk saat pengguna
-mendesak agar cepat selesai.
+## Hard rules
 
-1. **Tidak ada kerja tanpa snapshot.** Sebelum mengubah satu file pun dalam
-   tugas berisiko, buat checkpoint dulu. Kalau snapshot gagal, berhenti dan
-   laporkan alasannya. Jangan mulai kerja dengan janji snapshot menyusul.
-2. **Tidak ada promosi tanpa verifikasi lolos.** Checkpoint hanya menjadi LKG
-   setelah perintah verifikasi lolos. Verifikasi yang tidak dijalankan sama
-   dengan verifikasi gagal.
-3. **Rollback otomatis setelah 3 kali gagal.** Perbaikan yang gagal 3 kali
-   berturut-turut memicu rollback ke LKG tanpa menunggu perintah pengguna.
-   Batas ini bisa diubah di config (`max_fix_attempts`), default 3.
-4. **Rollback hanya menuju LKG.** Jangan rollback ke checkpoint sembarang,
-   kecuali pengguna secara eksplisit menyetujui targetnya lewat perintah
-   `/rollback <label>` dan checkpoint itu adalah LKG atau disetujui pengguna.
-5. **LKG tidak pernah dihapus.** Retensi boleh menghapus checkpoint lama,
-   tetapi LKG selalu dipertahankan, bahkan saat rollback sudah terjadi.
-6. **Rahasia tidak pernah masuk snapshot.** File `.env`, file kunci,
-   kredensial, `node_modules/`, direktori build, dan pola `.gitignore` tidak
-   boleh masuk snapshot, log, atau laporan. Kalau file rahasia terlihat di
-   `git status` dan belum diabaikan `.gitignore`, batalkan snapshot dan minta
-   pengguna menambahkannya ke `.gitignore` dulu.
-7. **Jangan ubah file di luar cakupan tugas.** Kalau tugas tidak menyebut
-   config atau lockfile, jangan sentuh file itu. Laporkan bila perubahan
-   terpaksa melebar.
-8. **Jangan menebak perintah verifikasi.** Pakai perintah dari
-   `.hermes-checkpoints/config.json` bila ada. Bila tidak ada, deteksi otomatis
-   (`package.json` test, `pytest`, `cargo test`, `go test`). Bila tidak ada
-   yang dikenali, tanya pengguna, jangan mengarang perintah.
-9. **Verifikasi punya batas waktu.** Default 300 detik (`verify_timeout_sec`).
-   Timeout berarti gagal, bukan menggantung sesi.
-10. **Retensi terbatas.** Simpan 10 checkpoint terakhir plus LKG. Checkpoint
-    yang lebih tua dihapus dari catatan state (commit git-nya tetap ada di
-    riwayat, tidak ditulis ulang).
-11. **Dry-run tidak mengubah apa pun.** Mode kering hanya menampilkan apa yang
-    akan terjadi.
-12. **Keadaan darurat menghentikan semua kerja.** Bila rollback gagal (file
-    terkunci, konflik), berhenti total, beri pesan jelas dan instruksi manual,
-    dan jangan menyentuh proyek lagi sampai pengguna memutuskan.
+These rules are never violated, including when the user pushes for speed.
 
-## State dan config
+1. **No work without a snapshot.** Before changing a single file in a risky
+   task, call `checkpoint_create`. If snapshot creation fails, stop and
+   report the reason. Never start work on the promise of a later snapshot.
+2. **No promotion without a passing verification.** A checkpoint becomes
+   the LKG only after `checkpoint_verify` passes. A verification that was
+   never run counts as failed.
+3. **Automatic rollback after 3 failed fixes.** The plugin counts failed
+   verifications on the active checkpoint. The third consecutive failure
+   triggers an automatic rollback to the LKG (or, for a first task with no
+   promoted LKG yet, to the active snapshot itself). The limit is
+   configurable (`max_fix_attempts`, default 3).
+4. **Rollback targets the LKG.** Never roll back to an arbitrary checkpoint,
+   except through `/rollback <label>` with explicit user approval, and
+   except for the first-task fallback in rule 3.
+5. **The LKG is never deleted.** Retention may prune old checkpoints, but
+   the LKG is always kept, even after a rollback has happened.
+6. **Secrets never enter a snapshot.** `.env`, key files, credentials,
+   `node_modules/`, build directories, and `.gitignore` patterns are never
+   snapshotted, logged, or reported. If a secret-like file shows up in
+   `git status` and is not gitignored, the snapshot is refused: ask the
+   user to gitignore it first.
+7. **Do not change files outside the task scope.** If the task does not
+   mention config or lockfiles, do not touch them. Report when the scope
+   is forced to widen.
+8. **Never guess the verify command.** Use `.hermes-checkpoints/config.json`
+   when present. Otherwise the plugin auto-detects (`npm test`, `pytest`,
+   `cargo test`, `go test`). When nothing is detected, ask the user.
+9. **Verification has a time limit.** Default 300 seconds
+   (`verify_timeout_sec`). A timeout is a failure, not a hung session.
+10. **Retention is bounded.** Keep the 10 newest non-LKG checkpoints plus
+    the LKG. Older checkpoint records and their snapshot refs are pruned.
+11. **Dry-run changes nothing.** `checkpoint_dry_run` only shows what
+    would happen.
+12. **Emergency stops all work.** If a rollback fails (locked file,
+    conflict, missing ref), the project enters emergency state: stop
+    completely, give a clear message and manual instructions, and do not
+    touch the project again until the user decides.
 
-Semua state tinggal di dalam proyek, di direktori `.hermes-checkpoints/`:
+## Tools
 
-- `state.json`: daftar checkpoint. Satu record berisi `id` (format
-  `cp-<tugas>-<nomor>`), `label`, `created_at` (ISO 8601), `backend`
-  (`git` atau `archive`), `ref` (hash commit atau path arsip),
-  `files_changed` (daftar path relatif, bukan isi file), `verify_command`,
-  `verify_status` (`pending`, `passed`, `failed`), `is_lkg` (true hanya untuk
-  satu checkpoint per proyek), `task`, dan `session`.
+| Tool | Purpose |
+|---|---|
+| `checkpoint_create` | Snapshot before a risky change. Args: `task` (required), `label`, `project_dir`, `session`, `allow_archive`. |
+| `checkpoint_verify` | Run the verify command. A pass promotes the active checkpoint to LKG; repeated failures trigger automatic rollback. |
+| `checkpoint_rollback` | Restore the LKG (or a given checkpoint id/label). |
+| `checkpoint_list` | List checkpoints with verify status and the LKG marker. |
+| `checkpoint_status` | Active checkpoint, LKG, last verify status, rollback count, emergency state. |
+| `checkpoint_dry_run` | Preview a snapshot or rollback without executing. |
+
+## Hooks
+
+- `pre_tool_call` blocks `write_file` and `patch` calls inside a project
+  that already uses SnaPeka but has no active checkpoint, forcing the
+  snapshot-first flow. Projects without a `.hermes-checkpoints` directory
+  are untouched, read-only tools always pass, and the hook never raises:
+  anything unexpected passes through.
+- `transform_llm_output` redacts assignment-style secrets
+  (`api_key = ...`, `token = ...`, `password = ...`) from replies.
+
+## Workflow
+
+Follow this state machine exactly, with no jumps:
+
+```
+IDLE -> SNAPSHOT -> WORK -> VERIFY -> PROMOTE -> IDLE
+                                   |
+                                failed
+                                   v
+                        FIX (at most 3 attempts)
+                           |             |
+                        passed      failed 3rd time
+                           v             v
+                       PROMOTE       ROLLBACK -> IDLE + report
+                                          |
+                                     rollback failed
+                                          v
+                                       EMERGENCY
+```
+
+### Step 1: SNAPSHOT
+
+1. Call `checkpoint_create` with a short task name. The plugin refuses
+   when the project is not a git repository and archive mode is not
+   approved: report that clearly instead of creating an empty snapshot.
+2. The plugin records the checkpoint id, label, timestamp, backend
+   (`git` or `archive`), ref, changed files (paths only), verify
+   command, and session in `.hermes-checkpoints/state.json`, and appends
+   a line to `audit.jsonl`.
+3. Report briefly: checkpoint id, file count, and the verify command.
+
+### Step 2: WORK
+
+Do the task, touching only in-scope files. Report before widening scope.
+
+### Step 3: VERIFY
+
+1. Call `checkpoint_verify`. It runs in the same backend where the code
+   changed (local, Docker, SSH, or sandbox). Never verify a different
+   copy of the code.
+2. A pass promotes the checkpoint to LKG and releases the lock.
+3. A failure counts toward the fix limit. The plugin reports the
+   command, duration, and the last 20 lines of error output. Fix the
+   error and verify again, at most 3 times in total.
+
+### Step 4: ROLLBACK
+
+1. The default target is the LKG. Another target needs explicit user
+   approval via `/rollback <label>`.
+2. Tracked files are reset to the LKG state (`git reset --hard`). Files
+   created during the task that were never tracked are listed in the
+   result, never deleted silently. Never run `git clean` without an
+   explicit user command.
+3. The plugin verifies once more after rollback. On success it reports
+   the target, the reason, and the leftover untracked files. The LKG
+   remains available for another rollback.
+4. On failure the project enters emergency state: stop, report clearly,
+   and wait for the user.
+
+## State and config
+
+All state lives inside the project, in `.hermes-checkpoints/`:
+
+- `state.json`: checkpoint records (`id` as `cp-<task>-<number>`,
+  `label`, `created_at` in ISO 8601, `backend`, `ref`, `files_changed`
+  as relative paths only, `verify_command`, `verify_status` as
+  `pending`/`passed`/`failed`, `is_lkg` true for exactly one checkpoint
+  per project, `task`, `session`), plus `active_checkpoint_id`,
+  `rollback_count`, and `emergency`.
 - `config.json`: `verify_command`, `verify_timeout_sec` (default 300),
   `max_fix_attempts` (default 3), `retention_count` (default 10),
   `exclude_patterns`, `auto_rollback` (default true),
-  `require_confirm_for_manual_rollback` (default false). Bila file belum ada,
-  buat dengan nilai default ini.
-- `audit.jsonl`: satu baris JSON per kejadian (`snapshot`, `verify`,
-  `promote`, `rollback`, `cleanup`) berisi waktu, sesi, checkpoint terkait,
-  dan hasil. Tidak pernah berisi isi file atau diff penuh.
+  `require_confirm_for_manual_rollback` (default false),
+  `max_archive_bytes` (default 500 MB compressed),
+  `warn_archive_bytes` (default 100 MB compressed).
+- `audit.jsonl`: one JSON line per event (`snapshot`, `verify`,
+  `promote`, `rollback`, `cleanup`). Never file contents or full diffs.
+- `lock`: held from snapshot until promotion or rollback, so a second
+  parallel task on the same project is rejected instead of silently
+  overwriting the first task's snapshot.
 
-Checkpoint terikat ke proyeknya lewat direktori kerja. Jangan pernah memakai
-checkpoint proyek lain, dan tolak argumen path yang keluar dari direktori
-proyek (misalnya `../`).
+Checkpoints are bound to their project directory (fingerprint in state).
+The plugin refuses to operate on another project's checkpoints, and
+rejects path traversal (`../`) in tool arguments.
 
-## Urutan langkah
+## Chat commands
 
-Ikuti state machine ini persis, tanpa lompatan:
+These commands call the same tools the model uses, so behavior is
+identical on every surface:
 
-```
-IDLE -> SNAPSHOT -> KERJA -> VERIFIKASI -> PROMOSI -> IDLE
-                                   |
-                                gagal
-                                   v
-                        PERBAIKAN (maks 3 kali)
-                           |             |
-                        lolos        gagal ke-3
-                           v             v
-                       PROMOSI       ROLLBACK -> IDLE + laporan
-                                          |
-                                     gagal rollback
-                                          v
-                                       DARURAT
-```
-
-### Langkah 1: SNAPSHOT
-
-1. Pastikan ini repo git: `git rev-parse --is-inside-work-tree`. Bila bukan
-   repo git, berhenti dengan pesan jelas. Mode arsip hanya bila pengguna
-   secara eksplisit mengizinkan (lihat "Proyek tanpa git" di bawah).
-2. Catat perintah verifikasi yang berlaku (dari config atau hasil deteksi).
-3. Periksa rahasia: jalankan `git status --porcelain`. Bila ada file rahasia
-   (`.env`, kunci, kredensial) yang akan ikut ditambahkan dan belum diabaikan
-   `.gitignore`, batalkan snapshot dan minta pengguna menambahkannya ke
-   `.gitignore`.
-4. Bila working tree bersih, snapshot adalah commit HEAD saat ini: catat
-   hash-nya sebagai `ref`, tanpa membuat commit baru.
-5. Bila working tree kotor, commit kondisi pra-tugas sebagai snapshot:
-   `git add -A` (menghormati `.gitignore`), lalu
-   `git commit -m "snapeka: cp-<tugas>-<nomor> <label>"`. Commit ini adalah
-   penanda yang jelas, bukan commit kerja biasa.
-6. Tulis record checkpoint ke `state.json` dengan `verify_status: pending`
-   dan `is_lkg: false`. Tambah satu baris `snapshot` ke `audit.jsonl`.
-7. Laporkan singkat ke pengguna: id checkpoint, jumlah file, dan perintah
-   verifikasi yang berlaku.
-
-### Langkah 2: KERJA
-
-Kerjakan tugas seperti biasa, dengan batas: hanya file dalam cakupan tugas.
-Bila cakupan terpaksa melebar, laporkan dulu sebelum melanjutkan.
-
-### Langkah 3: VERIFIKASI
-
-1. Jalankan perintah verifikasi di backend yang sama dengan tempat kode
-   diubah (lokal, Docker, SSH, atau sandbox yang sama). Jangan pernah menguji
-   salinan kode yang berbeda.
-2. Terapkan timeout: `timeout <verify_timeout_sec> <perintah>`. Timeout
-   berarti gagal.
-3. Catat hasil terstruktur: lolos atau gagal, perintah yang dijalankan,
-   durasi, dan ringkasan error (maks 20 baris terakhir output). Model tidak
-   perlu membaca log penuh untuk memutuskan langkah berikut.
-4. Bila lolos, lanjut ke PROMOSI. Bila gagal, lanjut ke PERBAIKAN.
-
-### Langkah 4: PERBAIKAN (maks 3 kali)
-
-Setiap percobaan: ubah kode untuk memperbaiki error, lalu jalankan VERIFIKASI
-lagi. Hitung setiap percobaan. Bila lolos, lanjut ke PROMOSI. Bila gagal
-ke-3, lanjut ke ROLLBACK otomatis (bila `auto_rollback` true; bila false,
-laporkan dan tunggu perintah pengguna).
-
-### Langkah 5: PROMOSI
-
-1. Ubah record checkpoint di `state.json`: `verify_status: passed`,
-   `is_lkg: true`. Checkpoint LKG sebelumnya menjadi `is_lkg: false`.
-2. Tambah baris `promote` ke `audit.jsonl`.
-3. Terapkan retensi: sisakan 10 checkpoint terakhir plus LKG, hapus record
-   yang lebih tua dari `state.json` (tambah baris `cleanup` ke audit log).
-4. Laporkan singkat: tugas selesai, checkpoint menjadi LKG.
-
-### Langkah 6: ROLLBACK
-
-1. Target default adalah LKG. Target lain hanya lewat `/rollback <label>`
-   dengan persetujuan pengguna.
-2. Kembalikan file terlacak ke kondisi LKG: `git reset --hard <ref-LKG>`.
-   Perintah ini tidak menyentuh file tak terlacak; setelah reset, laporkan
-   file tak terlacak yang tersisa dari `git status --porcelain` agar pengguna
-   memeriksanya sendiri. Jangan menjalankan `git clean` tanpa perintah
-   eksplisit pengguna.
-3. Jalankan VERIFIKASI sekali lagi. Bila lolos, tulis record rollback ke
-   `state.json` (bila perlu) dan baris `rollback` ke `audit.jsonl` berisi
-   waktu, checkpoint tujuan, dan alasan (otomatis atau manual, plus ringkasan
-   error pemicu). LKG tetap ada dan tetap bisa dipilih lagi.
-4. Laporkan singkat: proyek kembali ke LKG, verifikasi lolos, dan alasan
-   rollback.
-5. Bila rollback gagal (file terkunci, konflik): masuk DARURAT. Berhenti
-   total, beri pesan jelas dan instruksi manual, jangan menyentuh proyek
-   lagi sampai pengguna memutuskan.
-
-## Dry-run
-
-- Dry-run snapshot: tampilkan daftar file dari `git status --porcelain` yang
-  akan masuk snapshot, tanpa `git add` atau `git commit`.
-- Dry-run rollback: tampilkan checkpoint LKG tujuan dan perintah yang akan
-  dijalankan (`git reset --hard <ref>`), tanpa mengeksekusinya.
-
-## Proyek tanpa git
-
-Bila proyek bukan repo git dan pengguna mengizinkan mode arsip:
-
-1. Buat arsip snapshot dengan pengecualian rahasia, misalnya
-   `tar --exclude=.git --exclude=.env --exclude=node_modules -czf
-   .hermes-checkpoints/archive-<id>.tgz .` dari dalam direktori proyek.
-2. Catat `backend: archive` dan `ref` berupa path arsip di `state.json`.
-3. Rollback arsip: ekstrak arsip ke direktori kosong, bandingkan, dan
-   kembalikan file dengan persetujuan pengguna (jangan menimpa buta-buta).
-
-Bila pengguna tidak mengizinkan mode arsip, snapshot gagal secara eksplisit
-dengan pesan jelas. Jangan pernah membuat snapshot diam-diam yang kosong.
-
-## Perintah chat
-
-Perintah ini memanggil prosedur yang sama dengan yang dipakai model, sehingga
-perilaku identik di semua permukaan:
-
-| Perintah | Fungsi |
+| Command | Function |
 |---|---|
-| `/checkpoint` | Buat snapshot manual untuk tugas yang sedang berjalan |
-| `/checkpoint list` | Tampilkan daftar checkpoint dan LKG |
-| `/checkpoint status` | Tampilkan status checkpoint aktif dan verifikasi terakhir |
-| `/rollback` | Kembalikan proyek ke LKG |
-| `/rollback <label>` | Kembalikan proyek ke checkpoint berlabel (hanya bila checkpoint itu LKG atau disetujui pengguna) |
+| `/checkpoint` | Create a manual snapshot for the running task |
+| `/checkpoint list` | Show checkpoints and the LKG |
+| `/checkpoint status` | Show the active checkpoint and last verification |
+| `/rollback` | Restore the project to the LKG |
+| `/rollback <label>` | Restore to a labeled checkpoint (LKG or user-approved only) |
 
-## Contoh percakapan singkat
+## Short example
 
-Pengguna: refactor modul auth, tapi jangan sampai merusak login yang jalan.
+User: refactor the auth module, but do not break the login that works.
 
-Agent: Membuat snapshot dulu: `cp-refactor-auth-001` (12 file, verifikasi
-`npm test`). Lalu refactor. Verifikasi gagal 2 kali, perbaikan ketiga lolos.
-Checkpoint dipromosikan menjadi LKG. Selesai.
+Agent: Snapshot first: `cp-refactor-auth-001` (12 files, verify
+`npm test`). Then refactor. Verification fails twice, the third fix
+passes. The checkpoint is promoted to LKG. Done.
 
-Pengguna: kok login masih rusak setelah refactor kemarin?
+User: login is still broken after yesterday's refactor.
 
-Agent: Verifikasi gagal 3 kali, jadi rollback otomatis ke LKG
-`cp-refactor-auth-001`. Proyek kembali ke kondisi jalan dan verifikasi lolos.
-Perubahan refactor yang gagal tidak dipertahankan.
+Agent: Verification failed 3 times, so automatic rollback to LKG
+`cp-refactor-auth-001` ran. The project is back to a working state and
+verification passes. The failed refactor changes were not kept.
 
-## Kesalahan umum
+## Common mistakes
 
-- Mengubah file di luar cakupan tugas tanpa melapor.
-- Melewati verifikasi atau mempromosikan checkpoint yang verifikasinya
-  tidak lolos.
-- Menghapus atau menimpa LKG.
-- Membiarkan file rahasia masuk snapshot, log, atau laporan.
-- Mengulang perbaikan tanpa batas (lebih dari 3 kali) alih-alih rollback.
-- Menguji salinan kode yang berbeda dari tempat kode diubah.
-- Membuat snapshot kosong diam-diam saat git tidak tersedia.
+- Changing files outside the task scope without reporting.
+- Skipping verification or promoting a checkpoint that did not pass.
+- Deleting or overwriting the LKG.
+- Letting secret files into a snapshot, log, or report.
+- Retrying fixes without limit instead of rolling back.
+- Verifying a different copy of the code than the one that changed.
+- Creating a silent empty snapshot when git is unavailable.
 
-## Instalasi (fase 1)
+## Fallback when the plugin is unavailable
 
-Salin direktori skill ini ke `~/.hermes/skills/snapeka/` sehingga file ini
-berada di `~/.hermes/skills/snapeka/SKILL.md`. Tidak ada langkah lain.
-Dokumen acuan lengkap (PRD) ada di `docs/` repo SnaPeka.
+If the plugin tools are not installed, follow the same rules with raw
+git commands:
+
+1. Confirm a git repository (`git rev-parse --is-inside-work-tree`).
+   Otherwise stop with a clear message, unless the user explicitly
+   allows an archive snapshot.
+2. Check `git status --porcelain` for secret-like files (`.env`, keys,
+   credentials). If any would be added and are not gitignored, refuse
+   and ask the user to gitignore them.
+3. Clean tree: the snapshot ref is the current HEAD hash, no new commit.
+   Dirty tree: `git add -A` (respecting `.gitignore`), then commit the
+   pre-task state as `snapeka: cp-<task>-<number>`.
+4. Run the verify command with a timeout. Pass: the snapshot is the new
+   LKG. Fail 3 times: `git reset --hard <LKG ref>` and report untracked
+   leftovers. Never run `git clean` without an explicit user command.
