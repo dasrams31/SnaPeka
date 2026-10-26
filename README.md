@@ -2,6 +2,14 @@
 
 Checkpoint and rollback skill for Hermes Agent (Nous Research).
 
+## Status: Fase 1
+
+`SKILL.md` prosedural sudah tersedia di root repo ini. Cara pakai: salin
+direktori ini ke `~/.hermes/skills/snapeka/` sehingga file skill berada di
+`~/.hermes/skills/snapeka/SKILL.md`. Skill memakai perintah git langsung
+(snapshot, verifikasi, promosi, rollback otomatis setelah 3x gagal).
+Dokumen acuan lengkap (PRD Indonesia + Inggris) ada di `docs/`.
+
 Vibe coding fails when one bad change piles fixes on top of broken code until the
 project cannot return to a working state. Savepoint gives Hermes save points:
 before a risky change, the last verified working state is saved. After the
