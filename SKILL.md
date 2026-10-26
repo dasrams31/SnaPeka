@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires git for the primary backend and Python 3.10+ for the plugin. Works on Linux and macOS.
 metadata:
   author: dasrams31
-  version: 0.3.0
+  version: 0.4.0
 ---
 
 # Hermes Checkpoint

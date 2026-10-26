@@ -1,5 +1,5 @@
 name: hermes-checkpoint
-version: 0.3.0
+version: 0.4.0
 description: "Checkpoint and rollback for Hermes Agent. Snapshot a project before risky changes, verify afterwards, and restore the last-known-good state in one command when fixes fail repeatedly. Git backend with a tar.gz archive fallback, on-disk state, concurrency lock, a pre_tool_call guard that blocks file writes without an active checkpoint, rollback lessons for the memory tool, and plugin events for status subscribers."
 author: dasrams31
 kind: standalone

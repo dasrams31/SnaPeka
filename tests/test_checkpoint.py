@@ -359,6 +359,66 @@ class HermesCheckpointTestCase(unittest.TestCase):
         finally:
             os.chdir(old_cwd)
 
+    # Phase 4: large project (2,500 files) snapshot + rollback performance.
+    def test_large_project_2500_files(self):
+        import time
+        big = self.tmp / "bigproj"
+        big.mkdir()
+        _run(["git", "init", "-q"], big)
+        _run(["git", "config", "user.email", "test@test"], big)
+        _run(["git", "config", "user.name", "test"], big)
+        for d in range(25):
+            sub = big / f"mod{d:02d}"
+            sub.mkdir()
+            for f in range(100):
+                (sub / f"file{f:03d}.py").write_text(f"# module {d} file {f}\nVALUE = {f}\n", encoding="utf-8")
+        (big / "test_app.py").write_text("print('ok')\n", encoding="utf-8")
+        (big / ".hermes-checkpoint").mkdir()
+        (big / ".hermes-checkpoint" / "config.json").write_text(
+            json.dumps({"verify_command": "python3 test_app.py"}), encoding="utf-8")
+        start = time.monotonic()
+        created = cp.checkpoint_create(str(big), task="big")
+        create_s = time.monotonic() - start
+        self.assertTrue(created["ok"])
+        # Porcelain status collapses untracked directories, so count the
+        # snapshot tree itself: all 2,500 files must be in the ref.
+        tree = _run(["git", "ls-tree", "-r", "--name-only", created["ref"]], big)
+        tree_files = [line for line in tree.stdout.splitlines() if line.endswith(".py")]
+        self.assertGreaterEqual(len(tree_files), 2500)
+        cp.checkpoint_verify(str(big))
+        (big / "mod00" / "file000.py").write_text("# BROKEN\nVALUE = 'x'\n", encoding="utf-8")
+        cp.checkpoint_create(str(big), task="big-2")
+        start = time.monotonic()
+        rolled = cp.checkpoint_rollback(str(big))
+        rollback_s = time.monotonic() - start
+        self.assertTrue(rolled["ok"])
+        self.assertIn("VALUE = 0", (big / "mod00" / "file000.py").read_text(encoding="utf-8"))
+        print(f"\nPERF 2500 files: snapshot {create_s:.2f}s, rollback {rollback_s:.2f}s")
+        self.assertLess(create_s, 60)
+        self.assertLess(rollback_s, 60)
+
+    # Phase 4: tracked secret-like files warn (not refuse); .env.example exempt.
+    def test_tracked_secret_warning_and_template_exemption(self):
+        self._write_verify_config("python3 test_app.py")
+        certs = self.project / "certs"
+        certs.mkdir()
+        (certs / "test-cert.pem").write_text("FAKE CERT\n", encoding="utf-8")
+        _run(["git", "add", "-A"], self.project)
+        _run(["git", "commit", "-qm", "add test fixture"], self.project)
+        created = cp.checkpoint_create(str(self.project), task="warned")
+        self.assertTrue(created["ok"])
+        self.assertIn("certs/test-cert.pem", created.get("tracked_secret_like", []))
+        cp.checkpoint_verify(str(self.project))
+        # Untracked real secret: hard refusal.
+        (self.project / ".env").write_text("API_KEY=real\n", encoding="utf-8")
+        with self.assertRaises(cp.CheckpointError):
+            cp.checkpoint_create(str(self.project), task="blocked")
+        # Template exemption: .env.example never blocks.
+        (self.project / ".env").unlink()
+        (self.project / ".env.example").write_text("API_KEY=\n", encoding="utf-8")
+        allowed = cp.checkpoint_create(str(self.project), task="template-ok")
+        self.assertTrue(allowed["ok"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

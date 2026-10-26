@@ -189,6 +189,11 @@ def _exclude_patterns(project: Path, config: dict) -> list[str]:
 
 
 def _is_secret_basename(name: str) -> bool:
+    # ".env.example" is the conventional committed template (placeholders,
+    # not values). It is exempt everywhere this predicate is used so a
+    # template does not block snapshots or vanish from archives.
+    if name == ".env.example":
+        return False
     return any(fnmatch.fnmatch(name, pattern) for pattern in SECRET_BASENAME_PATTERNS)
 
 
@@ -234,6 +239,14 @@ def _git_status_paths(project: Path) -> list[str]:
     return paths
 
 
+def _git_tracked_paths(project: Path) -> list[str]:
+    """Paths tracked in HEAD (already committed, so already in history)."""
+    result = _git(project, "ls-files", check=False)
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line]
+
+
 def _guard_secrets(project: Path) -> None:
     offenders = [p for p in _git_status_paths(project) if _is_secret_basename(Path(p).name)]
     if offenders:
@@ -253,7 +266,11 @@ def _git_snapshot_commit(project: Path, checkpoint_id: str, exclude: list[str]) 
         args.append(f":!{pattern}")
     _git(project, *args)
     tree = _git(project, "write-tree").stdout.strip()
-    head = _git(project, "rev-parse", "HEAD", check=False).stdout.strip()
+    # NOTE: `git rev-parse HEAD` on an unborn branch prints "HEAD" to
+    # stdout and exits 128, so the return code (not stdout) decides
+    # whether a HEAD commit exists.
+    head_result = _git(project, "rev-parse", "HEAD", check=False)
+    head = head_result.stdout.strip() if head_result.returncode == 0 else ""
     if head:
         head_tree = _git(project, "rev-parse", f"{head}^{{tree}}").stdout.strip()
         if head_tree == tree:
@@ -338,7 +355,14 @@ def run_verify(project: Path, command: str, timeout_sec: int) -> dict:
 
 def _acquire_lock(project: Path, session: str, checkpoint_id: str) -> None:
     lock_path = _state_dir(project) / LOCK_FILENAME
-    if lock_path.exists():
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"session": session, "checkpoint_id": checkpoint_id,
+                          "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    try:
+        # Atomic create: portable (Windows included) and race-free, unlike
+        # an exists-check followed by a write.
+        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    except FileExistsError:
         try:
             holder = json.loads(lock_path.read_text(encoding="utf-8"))
         except ValueError:
@@ -348,12 +372,8 @@ def _acquire_lock(project: Path, session: str, checkpoint_id: str) -> None:
             + (f" (session {holder.get('session')}, checkpoint {holder.get('checkpoint_id')})" if holder else "")
             + ". Wait for it to finish, or delete .hermes-checkpoint/lock if the holder crashed."
         )
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path.write_text(
-        json.dumps({"session": session, "checkpoint_id": checkpoint_id,
-                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}),
-        encoding="utf-8",
-    )
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(payload)
 
 
 def _release_lock(project: Path) -> None:
@@ -573,6 +593,14 @@ def checkpoint_create(project_dir=None, task="", label=None, session="default",
                   "verify_command": verify_command}
         if warning:
             result["warning"] = warning
+        if record["backend"] == "git":
+            # Non-blocking: tracked files are already in repo history, so
+            # snapshotting adds no new exposure. Still, surface them so
+            # the user knows secret-like names are committed.
+            tracked = [p for p in _git_tracked_paths(project)
+                       if _is_secret_basename(Path(p).name)]
+            if tracked:
+                result["tracked_secret_like"] = tracked
         return result
     except Exception:
         _release_lock(project)

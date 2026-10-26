@@ -8,7 +8,7 @@ When it passes, the snapshot becomes the new last-known-good state (LKG).
 When fixes fail repeatedly, the project rolls back to the LKG in one
 command. All project artifacts in this repository are written in English.
 
-## Status: phase 3 complete
+## Status: phase 4 complete
 
 - **Phase 1 (skill only):** procedural `SKILL.md` using raw git commands.
   Done and tested on clean trees, dirty trees, and the secret guard.
@@ -22,21 +22,29 @@ command. All project artifacts in this repository are written in English.
   history for the Hermes memory tool, tool calls emit plugin events
   (`checkpoint_created`, `checkpoint_promoted`,
   `checkpoint_rolled_back`), and backend behavior (Docker/SSH/Daytona)
-  is documented in `SKILL.md` with a cwd-parity test. 20 tests pass.
-- **Phase 4 (hardening):** large-project tests, Windows tests, user docs.
-  Not started.
+  is documented in `SKILL.md` with a cwd-parity test. 20 tests passed
+  at the time.
+- **Phase 4 (hardening):** done. A 2,500-file project snapshots in
+  0.84s and rolls back in 0.06s on the development machine; the secret
+  guard now exempts the `.env.example` template, warns (without
+  refusing) about already-committed secret-like files, and the lock
+  uses atomic file creation; Windows compatibility is code-reviewed
+  (portable stdlib only, no shell, no POSIX-only calls) but not
+  machine-verified; user documentation is `docs/USER-GUIDE.md`.
+  22 tests pass.
 
 ## Layout
 
 ```
 SKILL.md                  Skill: decisions, hard rules, workflow (agentskills.io)
 plugin/
-  plugin.yaml             Plugin manifest (name hermes-checkpoint, version 0.3.0)
+  plugin.yaml             Plugin manifest (name hermes-checkpoint, version 0.4.0)
   __init__.py             register(ctx): 7 tools + 2 hooks + plugin events
   checkpoint.py           Core logic, standard library only
 tests/
-  test_checkpoint.py      unittest suite for PRD scenarios UT-01..UT-12
+  test_checkpoint.py      unittest suite for PRD scenarios UT-01..UT-12 + phase 3/4 tests
 docs/
+  USER-GUIDE.md             User documentation (install, use, config, troubleshooting)
   PRD-checkpoint-rollback-hermes-en.md   Canonical English PRD
   PRD-checkpoint-rollback-hermes-id.md   Legacy Indonesian PRD (archive)
 ```

@@ -514,3 +514,42 @@ says so instead of pretending otherwise:
   attempted (needs a reachable sshd plus keys).
 
 Version bumped to 0.3.0. Test count: 20 (16 phase 2 + 4 phase 3).
+
+### Phase 4 addendum: hardening (October 27, 2026)
+
+* **Large-project test.** A synthetic project with 2,500 files
+  snapshots in 0.84s and rolls back in 0.06s on the development
+  machine (git backend). The test counts the snapshot tree itself,
+  because porcelain status collapses untracked directories and would
+  undercount.
+* **Real bug found by the large-project test.** `git rev-parse HEAD`
+  on a repository with no commits yet prints "HEAD" to stdout and
+  exits 128, so the old code treated an unborn branch as an existing
+  HEAD and then failed on `HEAD^{tree}`. The fix decides from the
+  return code, not stdout. All other `check=False` call sites were
+  audited and already decide from the return code.
+* **Secret guard, refined.** `.env.example` is now exempt everywhere
+  the secret predicate is used: it is the conventional committed
+  template (placeholders, not values), and blocking it was a false
+  positive. Already-committed secret-like files no longer block
+  snapshots either (they are already in repo history, so snapshotting
+  adds no new exposure); instead the create result lists them under
+  `tracked_secret_like`. The hard refusal remains for secret-like
+  files that staging would newly introduce.
+* **Lock, hardened.** Lock acquisition now uses atomic file creation
+  (`O_CREAT | O_EXCL`), which is race-free and portable, replacing
+  the exists-check-then-write sequence.
+* **Windows.** The plugin uses only portable standard-library modules
+  and list-argument subprocess calls (no shell, no POSIX-only calls),
+  and the lock is atomic on Windows too. No live Windows run was
+  performed (no Windows machine available); Windows support is
+  code-reviewed, not machine-verified. Git must be on `PATH`.
+* **User documentation.** `docs/USER-GUIDE.md` covers install,
+  quickstart, chat commands, tools, configuration, projects without
+  git, backends, security notes, troubleshooting, and the Windows
+  note. Deviation from the PRD: the PRD asked for Indonesian user
+  documentation, but the user ordered all project artifacts in
+  English on October 27, 2026, so the guide is in English.
+
+Version bumped to 0.4.0. Test count: 22 (16 phase 2 + 4 phase 3 + 2
+phase 4). All four phases are now complete.
