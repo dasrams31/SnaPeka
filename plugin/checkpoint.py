@@ -682,7 +682,74 @@ def _do_rollback(project: Path, state: dict, config: dict, target, reason: str,
     audit(project, "rollback", record["id"],
           {"ok": True, "reason": reason, "verify": verify_outcome})
     return {"ok": True, "rolled_back_to": record["id"], "label": record.get("label"),
+            "reason": reason,
+            "memory_note": _memory_note(record, reason, verify_outcome),
             "leftovers_untracked": leftovers, "verify_after_rollback": verify_outcome}
+
+
+def _memory_note(record: dict, reason: str, verify_outcome) -> str:
+    """One paragraph the agent can record with the Hermes memory tool.
+
+    Hermes exposes no plugin-facing memory-write API, so the plugin does
+    not write memories itself. It hands the agent a ready-to-record note
+    instead; recording stays approval-gated on the agent side. The note
+    carries task, target, and reason only, never file contents.
+    """
+    task = record.get("task") or "an earlier task"
+    label = record.get("label") or record["id"]
+    verify_part = ""
+    if verify_outcome is not None:
+        verify_part = (" Verification after rollback passed."
+                       if verify_outcome.get("passed")
+                       else " Verification after rollback failed; the restored state still needs attention.")
+    return (f"Rollback lesson: task '{task}' was rolled back to checkpoint "
+            f"{record['id']} ({label}) because {reason}.{verify_part}")
+
+
+def checkpoint_lessons(project_dir=None) -> dict:
+    """Aggregate rollback history into a recordable lesson summary.
+
+    Reads only the plugin's own audit log. Returns counts by reason, the
+    most recent rollbacks, and a compact ``memory_text`` the agent can
+    record with the Hermes memory tool so future tasks avoid the same
+    failure patterns.
+    """
+    project = _project_dir(project_dir)
+    audit_path = _state_dir(project) / AUDIT_FILENAME
+    rollbacks = []
+    if audit_path.exists():
+        for line in audit_path.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("event") != "rollback":
+                continue
+            result = entry.get("result") or {}
+            if not result.get("ok"):
+                continue
+            verify = result.get("verify") or {}
+            rollbacks.append({
+                "at": entry.get("at"),
+                "checkpoint_id": entry.get("checkpoint_id"),
+                "reason": result.get("reason"),
+                "verify_after_rollback_passed": verify.get("passed"),
+            })
+    by_reason: dict[str, int] = {}
+    for item in rollbacks:
+        by_reason[str(item["reason"])] = by_reason.get(str(item["reason"]), 0) + 1
+    recent = sorted(rollbacks, key=lambda r: r.get("at") or "", reverse=True)[:5]
+    if not rollbacks:
+        memory_text = ("Hermes Checkpoint lessons: no rollbacks recorded for "
+                       "this project yet.")
+    else:
+        top = sorted(by_reason.items(), key=lambda kv: kv[1], reverse=True)
+        reasons = ", ".join(f"{reason} ({count}x)" for reason, count in top)
+        memory_text = (f"Hermes Checkpoint lessons: {len(rollbacks)} rollback(s) "
+                       f"recorded, by reason: {reasons}. Most recent target: "
+                       f"{recent[0]['checkpoint_id']} ({recent[0]['reason']}).")
+    return {"ok": True, "total_rollbacks": len(rollbacks),
+            "by_reason": by_reason, "recent": recent, "memory_text": memory_text}
 
 
 def checkpoint_rollback(project_dir=None, target=None, session="default") -> dict:
@@ -716,6 +783,7 @@ def checkpoint_status(project_dir=None) -> dict:
     elif lkg is not None:
         last_verify = lkg.get("verify_status")
     return {"ok": True,
+            "project_dir": str(project),
             "active_checkpoint_id": state.get("active_checkpoint_id"),
             "lkg_id": lkg["id"] if lkg else None,
             "last_verify_status": last_verify,

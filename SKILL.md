@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires git for the primary backend and Python 3.10+ for the plugin. Works on Linux and macOS.
 metadata:
   author: dasrams31
-  version: 0.2.0
+  version: 0.3.0
 ---
 
 # Hermes Checkpoint
@@ -87,6 +87,7 @@ These rules are never violated, including when the user pushes for speed.
 | `checkpoint_rollback` | Restore the LKG (or a given checkpoint id/label). |
 | `checkpoint_list` | List checkpoints with verify status and the LKG marker. |
 | `checkpoint_status` | Active checkpoint, LKG, last verify status, rollback count, emergency state. |
+| `checkpoint_lessons` | Rollback history aggregated for the memory tool: counts by reason, recent rollbacks, and a ready-to-record summary. |
 | `checkpoint_dry_run` | Preview a snapshot or rollback without executing. |
 
 ## Hooks
@@ -136,9 +137,11 @@ Do the task, touching only in-scope files. Report before widening scope.
 
 ### Step 3: VERIFY
 
-1. Call `checkpoint_verify`. It runs in the same backend where the code
-   changed (local, Docker, SSH, or sandbox). Never verify a different
-   copy of the code.
+1. Call `checkpoint_verify`. The plugin runs in the agent host process
+   against the project directory it is given, not inside the execution
+   backend. On SSH and Daytona backends the host copy can lag behind
+   backend edits until sync runs (see Backend behavior below), so
+   confirm the host copy is current before trusting a verify result.
 2. A pass promotes the checkpoint to LKG and releases the lock.
 3. A failure counts toward the fix limit. The plugin reports the
    command, duration, and the last 20 lines of error output. Fix the
@@ -157,6 +160,35 @@ Do the task, touching only in-scope files. Report before widening scope.
    remains available for another rollback.
 4. On failure the project enters emergency state: stop, report clearly,
    and wait for the user.
+5. After any rollback, record the lesson so the failure pattern is not
+   repeated. The rollback result carries a ready-to-record
+   `memory_note`; for a pattern across rollbacks, call
+   `checkpoint_lessons` and use its `memory_text`. Record it with the
+   Hermes memory tool, which is approval-gated. Never write into
+   `memories/MEMORY.md` directly: that bypasses the approval gate, and
+   the plugin deliberately has no memory-write path of its own.
+
+## Backend behavior
+
+The plugin loads in-process into the agent, so its git and verify
+subprocesses run in the agent host process, not inside the execution
+backend. Consequences per backend:
+
+- **Local and Docker with a bind-mounted working directory:** host and
+  backend see the same files, so snapshots, verify, and rollback are
+  consistent. This is the safe case.
+- **SSH and Daytona:** agent edits land in the remote environment and
+  reach the host only through file sync. A snapshot or rollback taken
+  on the host can lag behind unsynced backend edits, and the
+  `.hermes-checkpoint` state itself is subject to sync timing. Before
+  trusting a verify or rollback on these backends, confirm the host
+  copy is synced, and pass the project directory explicitly instead of
+  relying on the host working directory. `checkpoint_status` returns
+  the resolved `project_dir` so the agent can compare it with the
+  backend working directory.
+- **Git availability** depends on the host or sandbox image and is not
+  guaranteed on any backend. When git is missing and archive mode is
+  not approved, the plugin refuses with a clear message.
 
 ## State and config
 

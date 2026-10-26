@@ -476,3 +476,41 @@ identifiers are now Hermes Checkpoint:
 Nothing was ever installed under the old name, so no migration is needed.
 Earlier sections of this document still say SnaPeka; read them as Hermes
 Checkpoint.
+
+### Phase 3 addendum: Hermes integration (October 27, 2026)
+
+Phase 3 was built after verifying the integration points against the
+local Hermes Agent checkout. Two PRD goals turned out to have no
+plugin-facing API, so the implementation takes the supported path and
+says so instead of pretending otherwise:
+
+* **Memory (agent-mediated, not plugin-written).** `PluginContext`
+  offers no memory-write method and `register_memory_provider` is
+  inert; the memory-write path belongs to the agent's `memory` tool
+  and is approval-gated. The plugin therefore emits recordable text:
+  every rollback result carries a `memory_note`, and the new seventh
+  tool `checkpoint_lessons` aggregates the audit log (counts by
+  reason, recent rollbacks) into a `memory_text`. The agent records
+  these with the memory tool. Writing directly into
+  `memories/MEMORY.md` would bypass the approval gate and is refused
+  by design.
+* **Status (plugin events + transcript, no dashboard API).**
+  `ctx.emit` publishes to plugin subscribers only, and
+  `gateway_platform_event` is inbound-only, so there is no
+  plugin-to-dashboard channel. Tool calls now emit
+  `checkpoint_created`, `checkpoint_promoted`, and
+  `checkpoint_rolled_back` (fail-open), and the dashboard-visible
+  status remains the tool result text in the session transcript.
+* **Backends (documented parity, not live matrix runs).** The plugin
+  runs in-process in the agent host, not inside the backend. Docker
+  with a bind-mounted working directory is consistent; SSH and
+  Daytona sync files to the host, so host-side snapshots can lag
+  unsynced backend edits. `SKILL.md` documents this per backend,
+  `checkpoint_status` returns the resolved `project_dir` for
+  comparison with the backend working directory, and a test proves
+  explicit project paths work from any host working directory.
+  Docker and Daytona binaries are absent from the development
+  machine, so live backend runs were not possible; SSH was not
+  attempted (needs a reachable sshd plus keys).
+
+Version bumped to 0.3.0. Test count: 20 (16 phase 2 + 4 phase 3).

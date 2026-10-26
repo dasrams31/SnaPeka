@@ -29,6 +29,7 @@ class FakeCtx:
     def __init__(self):
         self.tools = {}
         self.hooks = {}
+        self.events = []
 
     def register_tool(self, name, toolset, schema, handler, description="", **kwargs):
         self.tools[name] = {"toolset": toolset, "schema": schema,
@@ -36,6 +37,9 @@ class FakeCtx:
 
     def register_hook(self, hook_name, callback):
         self.hooks.setdefault(hook_name, []).append(callback)
+
+    def emit(self, event, payload):
+        self.events.append((event, payload))
 
 
 class HermesCheckpointTestCase(unittest.TestCase):
@@ -283,6 +287,77 @@ class HermesCheckpointTestCase(unittest.TestCase):
         self.assertNotIn("sk-secret-123", redacted)
         self.assertIn("[REDACTED]", redacted)
         self.assertIsNone(cp.transform_llm_output_hook("nothing secret here\n"))
+
+    # Phase 3: rollback results carry a recordable memory note.
+    def test_rollback_memory_note(self):
+        self._write_verify_config("python3 test_app.py")
+        good = cp.checkpoint_create(str(self.project), task="good")
+        cp.checkpoint_verify(str(self.project))
+        (self.project / "app.py").write_text('def greet():\n    return "broken"\n', encoding="utf-8")
+        cp.checkpoint_create(str(self.project), task="bad")
+        rolled = cp.checkpoint_rollback(str(self.project))
+        self.assertTrue(rolled["ok"])
+        self.assertEqual(rolled["rolled_back_to"], good["checkpoint_id"])
+        self.assertIn("good", rolled["memory_note"])
+        self.assertIn("manual", rolled["memory_note"])
+        self.assertNotIn("broken", rolled["memory_note"])
+
+    # Phase 3: lessons aggregate the audit log for the memory tool.
+    def test_lessons_aggregates_rollbacks(self):
+        empty = cp.checkpoint_lessons(str(self.project))
+        self.assertEqual(empty["total_rollbacks"], 0)
+        self.assertIn("no rollbacks", empty["memory_text"])
+        self._write_verify_config("python3 test_app.py")
+        good = cp.checkpoint_create(str(self.project), task="good")
+        cp.checkpoint_verify(str(self.project))
+        (self.project / "app.py").write_text('def greet():\n    return "broken"\n', encoding="utf-8")
+        cp.checkpoint_create(str(self.project), task="bad")
+        cp.checkpoint_rollback(str(self.project))
+        lessons = cp.checkpoint_lessons(str(self.project))
+        self.assertEqual(lessons["total_rollbacks"], 1)
+        self.assertEqual(lessons["by_reason"], {"manual": 1})
+        self.assertEqual(lessons["recent"][0]["checkpoint_id"], good["checkpoint_id"])
+        self.assertIn("1 rollback", lessons["memory_text"])
+
+    # Phase 3: tool calls emit plugin events through ctx (fail-open).
+    def test_events_emitted(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "hermes_checkpoint_plugin", PLUGIN_DIR / "__init__.py")
+        plugin = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plugin)
+        ctx = FakeCtx()
+        plugin.register(ctx)
+        self._write_verify_config("python3 test_app.py")
+        proj = str(self.project)
+        created = ctx.tools["checkpoint_create"]["handler"]({"task": "good", "project_dir": proj})
+        self.assertTrue(created["ok"])
+        verified = ctx.tools["checkpoint_verify"]["handler"]({"project_dir": proj})
+        self.assertTrue(verified["passed"])
+        ctx.tools["checkpoint_create"]["handler"]({"task": "bad", "project_dir": proj})
+        rolled = ctx.tools["checkpoint_rollback"]["handler"]({"project_dir": proj})
+        self.assertTrue(rolled["ok"])
+        names = [event for event, _ in ctx.events]
+        self.assertIn("checkpoint_created", names)
+        self.assertIn("checkpoint_promoted", names)
+        self.assertIn("checkpoint_rolled_back", names)
+        rollback_events = [p for e, p in ctx.events if e == "checkpoint_rolled_back"]
+        self.assertEqual(rollback_events[0]["reason"], "manual")
+
+    # Phase 3: explicit project paths work from any host working directory
+    # (backend cwd parity: the plugin must never assume host cwd == backend cwd).
+    def test_explicit_project_path_from_other_cwd(self):
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(self.tmp)
+            self._write_verify_config("python3 test_app.py")
+            created = cp.checkpoint_create(str(self.project), task="elsewhere")
+            self.assertTrue(created["ok"])
+            status = cp.checkpoint_status(str(self.project))
+            self.assertEqual(status["project_dir"], str(self.project))
+            self.assertEqual(status["active_checkpoint_id"], created["checkpoint_id"])
+        finally:
+            os.chdir(old_cwd)
 
 
 if __name__ == "__main__":
