@@ -1,5 +1,5 @@
 ---
-name: snapeka
+name: hermes-checkpoint
 description: Checkpoint and rollback for Hermes Agent. Create a save point before risky changes, verify afterwards, and restore the last-known-good state in one command when fixes fail repeatedly. Deterministic plugin tools with a git backend and an archive fallback.
 license: MIT
 compatibility: Requires git for the primary backend and Python 3.10+ for the plugin. Works on Linux and macOS.
@@ -8,7 +8,7 @@ metadata:
   version: 0.2.0
 ---
 
-# SnaPeka
+# Hermes Checkpoint
 
 Checkpoint and rollback skill for Hermes Agent. One sentence:
 **no risky work without a save point, no promotion without a passing
@@ -20,9 +20,9 @@ decisions: when a snapshot is required, how many fix attempts are allowed,
 and when to stop. If the plugin is unavailable, use the raw git fallback
 at the end of this document.
 
-Install the skill directory as `~/.hermes/skills/snapeka/` (the directory
+Install the skill directory as `~/.hermes/skills/hermes-checkpoint/` (the directory
 name must match the `name` field above) and the plugin directory as
-`~/.hermes/plugins/snapeka/`, then run `hermes plugins enable snapeka`.
+`~/.hermes/plugins/hermes-checkpoint/`, then run `hermes plugins enable hermes-checkpoint`.
 
 ## When this skill is active
 
@@ -64,7 +64,7 @@ These rules are never violated, including when the user pushes for speed.
 7. **Do not change files outside the task scope.** If the task does not
    mention config or lockfiles, do not touch them. Report when the scope
    is forced to widen.
-8. **Never guess the verify command.** Use `.hermes-checkpoints/config.json`
+8. **Never guess the verify command.** Use `.hermes-checkpoint/config.json`
    when present. Otherwise the plugin auto-detects (`npm test`, `pytest`,
    `cargo test`, `go test`). When nothing is detected, ask the user.
 9. **Verification has a time limit.** Default 300 seconds
@@ -92,8 +92,8 @@ These rules are never violated, including when the user pushes for speed.
 ## Hooks
 
 - `pre_tool_call` blocks `write_file` and `patch` calls inside a project
-  that already uses SnaPeka but has no active checkpoint, forcing the
-  snapshot-first flow. Projects without a `.hermes-checkpoints` directory
+  that already uses Hermes Checkpoint but has no active checkpoint, forcing the
+  snapshot-first flow. Projects without a `.hermes-checkpoint` directory
   are untouched, read-only tools always pass, and the hook never raises:
   anything unexpected passes through.
 - `transform_llm_output` redacts assignment-style secrets
@@ -126,7 +126,7 @@ IDLE -> SNAPSHOT -> WORK -> VERIFY -> PROMOTE -> IDLE
    approved: report that clearly instead of creating an empty snapshot.
 2. The plugin records the checkpoint id, label, timestamp, backend
    (`git` or `archive`), ref, changed files (paths only), verify
-   command, and session in `.hermes-checkpoints/state.json`, and appends
+   command, and session in `.hermes-checkpoint/state.json`, and appends
    a line to `audit.jsonl`.
 3. Report briefly: checkpoint id, file count, and the verify command.
 
@@ -160,7 +160,7 @@ Do the task, touching only in-scope files. Report before widening scope.
 
 ## State and config
 
-All state lives inside the project, in `.hermes-checkpoints/`:
+All state lives inside the project, in `.hermes-checkpoint/`:
 
 - `state.json`: checkpoint records (`id` as `cp-<task>-<number>`,
   `label`, `created_at` in ISO 8601, `backend`, `ref`, `files_changed`
@@ -234,7 +234,7 @@ git commands:
    and ask the user to gitignore them.
 3. Clean tree: the snapshot ref is the current HEAD hash, no new commit.
    Dirty tree: `git add -A` (respecting `.gitignore`), then commit the
-   pre-task state as `snapeka: cp-<task>-<number>`.
+   pre-task state as `hermes-checkpoint: cp-<task>-<number>`.
 4. Run the verify command with a timeout. Pass: the snapshot is the new
    LKG. Fail 3 times: `git reset --hard <LKG ref>` and report untracked
    leftovers. Never run `git clean` without an explicit user command.

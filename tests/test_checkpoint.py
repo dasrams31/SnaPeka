@@ -1,4 +1,4 @@
-"""Tests for the SnaPeka phase 2 plugin (PRD section 11, UT-01..UT-12).
+"""Tests for the Hermes Checkpoint phase 2 plugin (PRD section 11, UT-01..UT-12).
 
 Standard library only (unittest). The core module is loaded by file path,
 exactly like the plugin wrapper does. A FakeCtx stands in for Hermes' ctx:
@@ -38,9 +38,9 @@ class FakeCtx:
         self.hooks.setdefault(hook_name, []).append(callback)
 
 
-class SnapekaTestCase(unittest.TestCase):
+class HermesCheckpointTestCase(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="snapeka-test-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="hermes-checkpoint-test-"))
         self.project = self.tmp / "proj"
         self.project.mkdir()
         _run(["git", "init", "-q"], self.project)
@@ -58,7 +58,7 @@ class SnapekaTestCase(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _write_verify_config(self, command):
-        state_dir = self.project / ".hermes-checkpoints"
+        state_dir = self.project / ".hermes-checkpoint"
         state_dir.mkdir(exist_ok=True)
         (state_dir / "config.json").write_text(
             json.dumps({"verify_command": command}), encoding="utf-8")
@@ -145,7 +145,7 @@ class SnapekaTestCase(unittest.TestCase):
     # UT-07: verify timeout is a clear failure, counted, never hangs
     def test_ut07_verify_timeout(self):
         self._write_verify_config("sleep 10")
-        state_dir = self.project / ".hermes-checkpoints"
+        state_dir = self.project / ".hermes-checkpoint"
         config = json.loads((state_dir / "config.json").read_text(encoding="utf-8"))
         config["verify_timeout_sec"] = 1
         (state_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
@@ -163,7 +163,7 @@ class SnapekaTestCase(unittest.TestCase):
         self._write_verify_config("python3 test_app.py")
         created = cp.checkpoint_create(str(self.project), task="doomed")
         cp.checkpoint_verify(str(self.project))
-        state_path = self.project / ".hermes-checkpoints" / "state.json"
+        state_path = self.project / ".hermes-checkpoint" / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         for record in state["checkpoints"]:
             if record["id"] == created["checkpoint_id"]:
@@ -221,7 +221,7 @@ class SnapekaTestCase(unittest.TestCase):
     def test_ut12_registration_mechanics(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            "snapeka_plugin", PLUGIN_DIR / "__init__.py")
+            "hermes_checkpoint_plugin", PLUGIN_DIR / "__init__.py")
         plugin = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(plugin)
         ctx = FakeCtx()
@@ -241,13 +241,13 @@ class SnapekaTestCase(unittest.TestCase):
     def test_dry_run_changes_nothing(self):
         result = cp.checkpoint_dry_run(str(self.project), action="snapshot")
         self.assertTrue(result["ok"])
-        self.assertFalse((self.project / ".hermes-checkpoints").exists())
+        self.assertFalse((self.project / ".hermes-checkpoint").exists())
 
     def test_archive_size_limit(self):
         plain = self.tmp / "plain2"
         plain.mkdir()
         (plain / "data.bin").write_bytes(b"x" * 1000)
-        state_dir = plain / ".hermes-checkpoints"
+        state_dir = plain / ".hermes-checkpoint"
         state_dir.mkdir(exist_ok=True)
         (state_dir / "config.json").write_text(
             json.dumps({"max_archive_bytes": 100}), encoding="utf-8")

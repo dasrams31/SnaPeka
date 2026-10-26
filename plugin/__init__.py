@@ -1,4 +1,4 @@
-"""SnaPeka plugin for Hermes Agent: deterministic checkpoint tools.
+"""Hermes Checkpoint plugin for Hermes Agent: deterministic checkpoint tools.
 
 Registered tools (toolset ``checkpoint``):
 
@@ -12,7 +12,7 @@ Registered tools (toolset ``checkpoint``):
 
 Registered hooks:
 
-* ``pre_tool_call``       - blocks file writes in SnaPeka projects that have
+* ``pre_tool_call``       - blocks file writes in Hermes Checkpoint projects that have
   no active checkpoint (fail-open: anything unexpected passes through)
 * ``transform_llm_output``- redacts assignment-style secrets from replies
 
@@ -29,7 +29,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _DIR = Path(__file__).resolve().parent
-_SPEC = importlib.util.spec_from_file_location("snapeka_checkpoint", _DIR / "checkpoint.py")
+_SPEC = importlib.util.spec_from_file_location("hermes_checkpoint", _DIR / "checkpoint.py")
 _core = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_core)
 
@@ -109,13 +109,13 @@ def _wrap(handler):
         except CheckpointError as exc:
             return {"ok": False, "error": str(exc)}
         except Exception as exc:  # never break the turn on an unexpected error
-            logger.debug("snapeka tool failed: %s", exc)
+            logger.debug("hermes-checkpoint tool failed: %s", exc)
             return {"ok": False, "error": f"unexpected error: {exc}"}
     return wrapper
 
 
 def register(ctx) -> None:
-    """Register SnaPeka tools and hooks (called once by the plugin loader)."""
+    """Register Hermes Checkpoint tools and hooks (called once by the plugin loader)."""
     for name, schema, handler, description in _TOOL_SPECS:
         ctx.register_tool(name=name, toolset="checkpoint", schema=schema,
                           handler=_wrap(handler), description=description)

@@ -1,8 +1,8 @@
-# Hermes Checkpoint (SnaPeka)
+# Hermes Checkpoint (Hermes Checkpoint)
 
 Checkpoint and rollback skill + plugin for Hermes Agent (Nous Research).
 
-SnaPeka gives Hermes a safety net for vibe coding: before a risky change,
+Hermes Checkpoint gives Hermes a safety net for vibe coding: before a risky change,
 the project state is snapshotted. After the change, a verify command runs.
 When it passes, the snapshot becomes the new last-known-good state (LKG).
 When fixes fail repeatedly, the project rolls back to the LKG in one
@@ -26,7 +26,7 @@ command. All project artifacts in this repository are written in English.
 ```
 SKILL.md                  Skill: decisions, hard rules, workflow (agentskills.io)
 plugin/
-  plugin.yaml             Plugin manifest (name snapeka, version 0.2.0)
+  plugin.yaml             Plugin manifest (name hermes-checkpoint, version 0.2.0)
   __init__.py             register(ctx): 6 tools + 2 hooks
   checkpoint.py           Core logic, standard library only
 tests/
@@ -39,12 +39,12 @@ docs/
 ## Install
 
 ```bash
-# Skill (directory name must match the frontmatter name: snapeka)
-cp -r . ~/.hermes/skills/snapeka
+# Skill (directory name must match the frontmatter name: hermes-checkpoint)
+cp -r . ~/.hermes/skills/hermes-checkpoint
 
 # Plugin
-cp -r plugin ~/.hermes/plugins/snapeka
-hermes plugins enable snapeka
+cp -r plugin ~/.hermes/plugins/hermes-checkpoint
+hermes plugins enable hermes-checkpoint
 ```
 
 No dependencies beyond Python 3.10+ and git (for the primary backend).
@@ -60,10 +60,10 @@ No dependencies beyond Python 3.10+ and git (for the primary backend).
 | `checkpoint_status` | Active checkpoint, LKG, last verify, rollback count |
 | `checkpoint_dry_run` | Preview a snapshot or rollback without executing |
 
-State lives in the project, in `.hermes-checkpoints/` (`state.json`,
+State lives in the project, in `.hermes-checkpoint/` (`state.json`,
 `config.json`, `audit.jsonl`, `lock`). Snapshots are commits on dedicated
-refs (`refs/snapeka/<id>`) so the user's working branch history is
-untouched; the LKG is additionally tracked at `refs/snapeka/lkg`. The
+refs (`refs/hermes-checkpoint/<id>`) so the user's working branch history is
+untouched; the LKG is additionally tracked at `refs/hermes-checkpoint/lkg`. The
 archive backend (projects without git) writes a `.tgz` snapshot with a
 warning above 100 MB and a refusal above 500 MB compressed (both
 configurable).

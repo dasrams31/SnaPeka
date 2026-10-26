@@ -454,3 +454,25 @@ explicit, never a silent empty snapshot.
   machine. Phase 2 verifies registration mechanics through a fake
   context; CLI disable remains to be verified on a machine with Hermes
   installed.
+
+### Rename: SnaPeka becomes Hermes Checkpoint (October 27, 2026, user directive)
+
+The product name SnaPeka is retired. The skill, the plugin, and all
+identifiers are now Hermes Checkpoint:
+
+* Skill frontmatter name: `hermes-checkpoint`; install directory:
+  `~/.hermes/skills/hermes-checkpoint/`.
+* Plugin manifest name: `hermes-checkpoint`; install directory:
+  `~/.hermes/plugins/hermes-checkpoint/`; enable with
+  `hermes plugins enable hermes-checkpoint`.
+* Snapshot refs: `refs/hermes-checkpoint/<id>`; LKG ref:
+  `refs/hermes-checkpoint/lkg`; snapshot commit messages:
+  `hermes-checkpoint: cp-<task>-<number>`.
+* Project state directory: `.hermes-checkpoint/` (previously
+  `.hermes-checkpoints/`).
+* The repository was already renamed to `hermes-checkpoint` before this
+  change; the tool names (`checkpoint_*`) are unchanged.
+
+Nothing was ever installed under the old name, so no migration is needed.
+Earlier sections of this document still say SnaPeka; read them as Hermes
+Checkpoint.

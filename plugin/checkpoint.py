@@ -1,4 +1,4 @@
-"""SnaPeka checkpoint core: deterministic snapshot, verify, and rollback.
+"""Hermes Checkpoint checkpoint core: deterministic snapshot, verify, and rollback.
 
 Standard library only. No network, no third-party imports, no Hermes imports:
 the plugin wrapper (``__init__.py``) adapts these functions to ``ctx``.
@@ -7,11 +7,11 @@ Design notes (see the English PRD for the full specification):
 
 * Git is the primary snapshot backend. A snapshot commit is created with
   plumbing (``write-tree`` + ``commit-tree``) on a dedicated ref
-  (``refs/snapeka/<id>``) so the user's working branch history is untouched.
+  (``refs/hermes-checkpoint/<id>``) so the user's working branch history is untouched.
   A clean tree needs no new commit: the snapshot ref is the HEAD hash.
 * Projects without git use a tar.gz archive backend, only with explicit
   user approval (``allow_archive=True``).
-* All state lives on disk in ``.hermes-checkpoints/`` so a new process
+* All state lives on disk in ``.hermes-checkpoint/`` so a new process
   (for example after backend hibernation) resumes from the same state.
 * Tool results never contain file contents, only paths and counts.
 """
@@ -28,13 +28,13 @@ import tarfile
 import time
 from pathlib import Path
 
-STATE_DIRNAME = ".hermes-checkpoints"
+STATE_DIRNAME = ".hermes-checkpoint"
 STATE_FILENAME = "state.json"
 CONFIG_FILENAME = "config.json"
 AUDIT_FILENAME = "audit.jsonl"
 LOCK_FILENAME = "lock"
-REF_PREFIX = "refs/snapeka/"
-LKG_REF = "refs/snapeka/lkg"
+REF_PREFIX = "refs/hermes-checkpoint/"
+LKG_REF = "refs/hermes-checkpoint/lkg"
 
 DEFAULT_CONFIG = {
     "verify_command": None,  # None means auto-detect
@@ -65,7 +65,7 @@ SECRET_BASENAME_PATTERNS = (
 # Directories that are never archived, even for the archive backend.
 ARCHIVE_ALWAYS_EXCLUDE = {
     ".git",
-    ".hermes-checkpoints",
+    ".hermes-checkpoint",
     "node_modules",
     "dist",
     "build",
@@ -245,7 +245,7 @@ def _guard_secrets(project: Path) -> None:
 
 
 def _git_snapshot_commit(project: Path, checkpoint_id: str, exclude: list[str]) -> tuple[str, list[str]]:
-    """Create a snapshot commit on refs/snapeka/<id>. Returns (ref, files)."""
+    """Create a snapshot commit on refs/hermes-checkpoint/<id>. Returns (ref, files)."""
     files = _git_status_paths(project)
     _guard_secrets(project)
     args = ["add", "-A", "--"]
@@ -261,7 +261,7 @@ def _git_snapshot_commit(project: Path, checkpoint_id: str, exclude: list[str]) 
     parents = ["-p", head] if head else []
     commit = _git(
         project, "commit-tree", tree, *parents,
-        "-m", f"snapeka: {checkpoint_id}",
+        "-m", f"hermes-checkpoint: {checkpoint_id}",
     ).stdout.strip()
     _git(project, "update-ref", f"{REF_PREFIX}{checkpoint_id}", commit)
     return commit, files
@@ -346,7 +346,7 @@ def _acquire_lock(project: Path, session: str, checkpoint_id: str) -> None:
         raise CheckpointError(
             "another task holds the checkpoint lock"
             + (f" (session {holder.get('session')}, checkpoint {holder.get('checkpoint_id')})" if holder else "")
-            + ". Wait for it to finish, or delete .hermes-checkpoints/lock if the holder crashed."
+            + ". Wait for it to finish, or delete .hermes-checkpoint/lock if the holder crashed."
         )
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text(
@@ -590,7 +590,7 @@ def checkpoint_verify(project_dir=None, command=None, session="default") -> dict
     if not verify_command:
         raise CheckpointError(
             "no verify command configured and none detected. Set verify_command in "
-            ".hermes-checkpoints/config.json or pass a command."
+            ".hermes-checkpoint/config.json or pass a command."
         )
     timeout = int(config.get("verify_timeout_sec", 300))
     outcome = run_verify(project, verify_command, timeout)
@@ -754,11 +754,11 @@ def checkpoint_dry_run(project_dir=None, action="snapshot") -> dict:
 # ---------------------------------------------------------------------------
 
 def pre_tool_call_hook(tool_name: str = "", args=None, **_) -> dict | None:
-    """Block file writes in SnaPeka projects that have no active checkpoint.
+    """Block file writes in Hermes Checkpoint projects that have no active checkpoint.
 
     Only enforced when the target file sits inside a project that already has
-    a ``.hermes-checkpoints`` state directory (opt-in by use). Read-only
-    tools, SnaPeka's own tools, and unresolvable targets always pass through.
+    a ``.hermes-checkpoint`` state directory (opt-in by use). Read-only
+    tools, Hermes Checkpoint's own tools, and unresolvable targets always pass through.
     """
     try:
         if not tool_name or tool_name.startswith("checkpoint_"):
@@ -789,7 +789,7 @@ def pre_tool_call_hook(tool_name: str = "", args=None, **_) -> dict | None:
                     return {
                         "action": "block",
                         "message": (
-                            "SnaPeka: no active checkpoint for this project. "
+                            "Hermes Checkpoint: no active checkpoint for this project. "
                             "Create one first with checkpoint_create before modifying files, "
                             "so a failed change can be rolled back."
                         ),
